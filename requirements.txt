@@ -1,0 +1,32 @@
+# project_root/requirements.txt
+
+# 기본 파이썬 필수 라이브러리들
+numpy
+pandas
+scikit-learn
+matplotlib
+plotly
+
+# 딥러닝 프레임워크
+torch
+torchvision
+torchaudio
+
+# 시계열 모델이나 유틸 추가 필요시
+# (TFT 구현에 필요한 라이브러리는 구현단계에서 추가할 수 있음)
+
+# NLP나 허깅페이스 모델 활용시
+# transformers
+
+# 웹서버 및 API
+fastapi
+uvicorn[standard]
+
+# 거래소 API 라이브러리
+ccxt
+
+# 하이퍼파라미터 튜닝 라이브러리
+optuna
+
+# dotenv (환경변수 관리)
+python-dotenv
