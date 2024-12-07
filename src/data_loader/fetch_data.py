@@ -4,8 +4,10 @@ import os
 import time
 import ccxt
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import logging
+from math import ceil
+from tqdm import tqdm
 
 from src.configs.config import (
     BINANCE_API_KEY,
@@ -29,15 +31,16 @@ def init_exchange():
         'apiKey': BINANCE_API_KEY,
         'secret': BINANCE_SECRET_KEY,
         'enableRateLimit': True,
-        # 실전 거래시에는 testnet=False (기본값), 아래 testnet 예시는 
-        # 실제거래 여부에 따라 수정 필요
-        'options': {'defaultType': 'future'}, # 선물시장 등 필요시 옵션 설정
+        'options': {
+            'defaultType': 'future',  
+            'adjustForTimeDifference': True,
+            'recvWindow': 60000
+        },
     })
+    exchange.load_markets()
     return exchange
 
 def safe_fetch_ohlcv(exchange, symbol, timeframe, since=None, limit=1000):
-    """주어진 파라미터로 OHLCV 데이터를 안전하게 가져오는 함수.
-       예외 발생 시 재시도, rate limit 대기 등을 구현."""
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -55,20 +58,28 @@ def safe_fetch_ohlcv(exchange, symbol, timeframe, since=None, limit=1000):
     return []
 
 def fetch_full_data():
-    """2년치(설정값 기준) 1분봉 데이터를 Binance에서 연속적으로 수집 후 CSV 저장.
-       실전용: 안정성 강화, 로그 출력, 중간 세이브 가능.
-    """
     exchange = init_exchange()
-    now = datetime.utcnow()
+
+    now = datetime.now(UTC)  
     start_time = now - timedelta(days=365*YEARS_TO_FETCH)
     since_timestamp = int(start_time.timestamp() * 1000)
+    now_timestamp = int(now.timestamp() * 1000)
 
     all_data = []
     current_since = since_timestamp
 
     logging.info(f"Start fetching {YEARS_TO_FETCH} years of {PAIR_SYMBOL} data from {start_time} to now.")
 
-    # 반복적으로 데이터 수집
+    # 총 필요한 대략적 호출 수 추정 (총 분 수 / FETCH_LIMIT)
+    # 총 분: YEARS_TO_FETCH * 365일 * 24시간 * 60분 = 약 1,051,200분 (2년 기준)
+    # 정확한 계산:
+    total_minutes = YEARS_TO_FETCH * 365 * 24 * 60
+    total_calls_estimate = ceil(total_minutes / FETCH_LIMIT)
+
+    # tqdm 프로그레스 바 초기화
+    # desc는 시작 시점 설명, dynamic desc로 현재 구간 갱신 예정
+    pbar = tqdm(total=total_calls_estimate, desc="Fetching data...", unit="req", dynamic_ncols=True)
+
     while True:
         ohlcv = safe_fetch_ohlcv(exchange, PAIR_SYMBOL, TIMEFRAME, since=current_since, limit=FETCH_LIMIT)
         if not ohlcv:
@@ -78,19 +89,26 @@ def fetch_full_data():
         all_data.extend(ohlcv)
 
         last_timestamp = ohlcv[-1][0]
-        current_since = last_timestamp + (60 * 1000)  # 다음 분부터 가져오기
+        current_since = last_timestamp + (60 * 1000)
 
-        # 종료 조건: 현재 시간 도달 시 종료
-        if current_since >= int(now.timestamp() * 1000):
+        # 현재 구간 표시: last_timestamp를 datetime으로 변환해 tqdm desc 업데이트
+        last_dt = datetime.utcfromtimestamp(last_timestamp/1000.0).replace(tzinfo=UTC)
+        # desc에 현재 어디까지 받았는지 표시
+        pbar.set_description_str(f"Fetching up to {last_dt.isoformat()}")
+
+        pbar.update(1)  # fetch 한 번 할 때마다 progress +1
+
+        if current_since >= now_timestamp:
             logging.info("Reached current time. Fetching complete.")
             break
 
-        # Rate limit 대기
         time.sleep(FETCH_INTERVAL_SEC)
+
+    pbar.close()
 
     if all_data:
         df = pd.DataFrame(all_data, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
         df.sort_values("timestamp", inplace=True)
         df.set_index("timestamp", inplace=True)
 
