@@ -42,7 +42,9 @@ def scale_features(df):
     # OHLCV + ma_5, ma_20, ma_60, rsi, bollinger_mid 등
     # target_return는 나중에 분리하므로 스케일링 안 함
     feature_cols = ["open", "high", "low", "close", "volume", 
-                    "ma_5", "ma_20", "ma_60", "rsi", "bollinger_mid"]
+                    "ma_5", "ma_20", "ma_60", "rsi", 
+                    "bollinger_mid", "bollinger_upper", "bollinger_lower"]
+
     
     scaler = StandardScaler()
     scaled_values = scaler.fit_transform(df[feature_cols])
