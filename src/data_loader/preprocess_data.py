@@ -1,106 +1,119 @@
 # F:\git\btc_trading_bot\src\data_loader\preprocess_data.py
 
 import os
+import logging
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+import ta
 from datetime import timedelta
+import joblib
 
-from src.configs.config import DATA_RAW_PATH, YEARS_TO_FETCH
-from src.features.indicators import add_moving_averages, add_rsi, add_bollinger_bands
+def load_and_preprocess_data(
+    data_path="F:\\git\\btc_trading_bot\\data\\raw\\btc_1m_2years.csv",
+    recent_days=730,  # 약 2년치
+    models_dir="F:\\git\\btc_trading_bot\\models"
+):
+    """
+    전처리 과정 (2년치 1분봉 데이터 기준):
+    - data_path: 2년치 1분봉 데이터 CSV (예: btc_1m_2years.csv)
+    - recent_days=730으로 설정하여 약 2년치 데이터 필터링 (원한다면 None으로 전체 사용 가능)
+    - close=0 제거, 결측치 처리
+    - 지표계산: MA_5, MA_20, MA_60, RSI(14), Bollinger Bands(mid, upper, lower)
+      성능 향상 기대 근거로 Bollinger 상하단 사용
+    - NaN 제거
+    - MinMaxScaler로 X, Y 정규화 후 스케일러와 피처목록 저장
+    - 윈도우 생성은 하지 않음 (학습 시 Dataset에서 처리)
 
-def load_raw_data(file_name=None):
-    if file_name is None:
-        file_name = f"btc_1m_{YEARS_TO_FETCH}years.csv"
-    csv_path = os.path.join(DATA_RAW_PATH, file_name)
-    df = pd.read_csv(csv_path, parse_dates=True, index_col="timestamp")
-    df.sort_index(inplace=True)
-    return df
+    반환:
+    X_data_array (N,F), Y_data_array (N,), features(피처 목록), df.index
+    """
 
-def compute_features(df):
-    # OHLCV: df에 이미 있음
-    # 지표 추가
-    df = add_moving_averages(df)
-    df = add_rsi(df)
-    df = add_bollinger_bands(df)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    # 보조지표 계산 후 초기 구간에 NaN 발생 → 제거
+    logging.info(f"Loading data from: {data_path}")
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"Data file not found: {data_path}")
+
+    df = pd.read_csv(data_path)
+    
+    if 'timestamp' not in df.columns:
+        raise ValueError("Data must have a 'timestamp' column.")
+
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df.set_index('timestamp', inplace=True)
+    logging.info("Converted 'timestamp' to DatetimeIndex.")
+    
+    # 결측치 처리
+    df.fillna(method='ffill', inplace=True)
+    df.fillna(method='bfill', inplace=True)
+
+    # 최근 N일(2년) 필터링
+    if recent_days is not None:
+        end_date = df.index.max()
+        start_date = end_date - pd.Timedelta(days=recent_days)
+        df = df.loc[start_date:end_date]
+        logging.info(f"Filtered last {recent_days} days (~2 years). Rows: {len(df)}")
+
+    # close=0 제거
+    before_len = len(df)
+    df = df[df['close'] != 0]
+    logging.info(f"Removed close=0. Before: {before_len}, After: {len(df)}")
+
+    # 지표 계산
+    df['ma_5'] = df['close'].rolling(window=5).mean()
+    df['ma_20'] = df['close'].rolling(window=20).mean()
+    df['ma_60'] = df['close'].rolling(window=60).mean()
+
+    bb_indicator = ta.volatility.BollingerBands(df['close'], window=20, window_dev=2)
+    df['bollinger_mid'] = bb_indicator.bollinger_mavg()
+    df['bollinger_upper'] = bb_indicator.bollinger_hband()
+    df['bollinger_lower'] = bb_indicator.bollinger_lband()
+
+    df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+
     df.dropna(inplace=True)
+    logging.info(f"Dropped NaN. Rows: {len(df)}")
 
-    return df
+    # 피처 목록 (기획서 합의)
+    feature_columns = [
+        'open', 'high', 'low', 'close', 'volume',
+        'ma_5', 'ma_20', 'ma_60', 'rsi',
+        'bollinger_mid', 'bollinger_upper', 'bollinger_lower'
+    ]
 
-def add_target(df, prediction_horizon=10):
-    # prediction_horizon 후의 close 가격 대비 현재 close의 변동률을 타겟으로 설정
-    # (close(t+10min)/close(t)) - 1 = 변동률
-    df["future_close"] = df["close"].shift(-prediction_horizon)
-    df["target_return"] = (df["future_close"] / df["close"]) - 1.0
-    df.dropna(inplace=True)  # 마지막 부분에서 future_close 없으니 NaN 발생
-    return df
+    X_data = df[feature_columns]
+    Y_data = df['close']
 
-def scale_features(df):
-    # 스케일링 대상 컬럼 선정
-    # OHLCV + ma_5, ma_20, ma_60, rsi, bollinger_mid 등
-    # target_return는 나중에 분리하므로 스케일링 안 함
-    feature_cols = ["open", "high", "low", "close", "volume", 
-                    "ma_5", "ma_20", "ma_60", "rsi", 
-                    "bollinger_mid", "bollinger_upper", "bollinger_lower"]
+    # 스케일링
+    scaler_X = MinMaxScaler()
+    scaled_X = scaler_X.fit_transform(X_data)
 
-    
-    scaler = StandardScaler()
-    scaled_values = scaler.fit_transform(df[feature_cols])
-    for i, col in enumerate(feature_cols):
-        df[col] = scaled_values[:, i]
-    
-    return df, scaler
+    scaler_Y = MinMaxScaler()
+    scaled_Y = scaler_Y.fit_transform(Y_data.values.reshape(-1,1)).reshape(-1)
 
-def create_timeseries_data(df, input_window=4320, prediction_horizon=10):
-    """
-    input_window 분(72시간)이 입력, prediction_horizon=10분 후의 변동률 예측.
-    df는 이미 target_return 컬럼 포함, 모든 스케일링 완료 상태 가정.
-    """
+    X_data_array = scaled_X.astype(np.float32)
+    Y_data_array = scaled_Y.astype(np.float32)
 
-    feature_cols = ["open", "high", "low", "close", "volume", 
-                    "ma_5", "ma_20", "ma_60", "rsi", "bollinger_mid"]
-    target_col = "target_return"
+    # 스케일러, 피처 목록 저장
+    os.makedirs(models_dir, exist_ok=True)
+    joblib.dump(scaler_X, os.path.join(models_dir, "scaler_X.pkl"))
+    joblib.dump(scaler_Y, os.path.join(models_dir, "scaler_Y.pkl"))
 
-    X = []
-    y = []
-    timestamps = df.index.values
+    with open(os.path.join(models_dir, "features.txt"), "w") as f:
+        f.write("\n".join(feature_columns))
 
-    # 마지막 예측이 가능하려면: i+input_window+prediction_horizon <= len(df)
-    for i in range(len(df) - input_window - prediction_horizon):
-        X_seq = df.iloc[i:(i+input_window)][feature_cols].values
-        y_val = df.iloc[i+input_window][target_col]  # input_window 뒤 10분 후 return
-        X.append(X_seq)
-        y.append(y_val)
-
-    X = np.array(X)
-    y = np.array(y)
-    return X, y
-
-def preprocess_data():
-    df = load_raw_data()
-    df = compute_features(df)
-    df = add_target(df, prediction_horizon=10)  # 예: 10분 후 변동률 예측
-    df, scaler = scale_features(df)
-    X, y = create_timeseries_data(df, input_window=4320, prediction_horizon=10)
-
-    # 이후 학습/검증/테스트 분리
-    # 예: 70% train, 20% valid, 10% test
-    train_size = int(0.7*len(X))
-    valid_size = int(0.2*len(X))
-    test_size = len(X) - train_size - valid_size
-
-    X_train, y_train = X[:train_size], y[:train_size]
-    X_valid, y_valid = X[train_size:train_size+valid_size], y[train_size:train_size+valid_size]
-    X_test, y_test = X[train_size+valid_size:], y[train_size+valid_size:]
-
-    return X_train, y_train, X_valid, y_valid, X_test, y_test, scaler
+    logging.info("Preprocessing complete. Scalers and features saved.")
+    return X_data_array, Y_data_array, feature_columns, df.index
 
 
+# 아래 main 부분은 필요하다면 테스트용. 실제 운영 시 제거 가능.
 if __name__ == "__main__":
-    X_train, y_train, X_valid, y_valid, X_test, y_test, scaler = preprocess_data()
-    print("Preprocessing Done!")
-    print("Train set shape:", X_train.shape, y_train.shape)
-    print("Valid set shape:", X_valid.shape, y_valid.shape)
-    print("Test set shape:", X_test.shape, y_test.shape)
+    # 실제 2년치 1분봉 데이터 파일명 확인 후 경로 설정
+    X_data, Y_data, features, idx = load_and_preprocess_data(
+        data_path="F:\\git\\btc_trading_bot\\data\\raw\\btc_1m_2years.csv",
+        recent_days=None  # 2년치
+    )
+    print("X shape:", X_data.shape, "Y shape:", Y_data.shape)
+    print("Features:", features)
+    print("Index range:", idx.min(), idx.max())
