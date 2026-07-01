@@ -1,6 +1,3 @@
-# F:\git\btc_trading_bot\src\data_loader\preprocess_data.py
-# Colab용으로 수정: Windows 절대경로 대신 상대경로 사용
-
 import os
 import logging
 import pandas as pd

@@ -1,7 +1,6 @@
-# F:\git\btc_trading_bot\src\trainer\train.py
-
 import os
 import logging
+from pathlib import Path
 import numpy as np
 import torch
 import torch.optim as optim
@@ -11,9 +10,11 @@ from src.model.transformer_model import TransformerForecastModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+
 def train_model(
-    processed_dir="F:\\git\\btc_trading_bot\\data\\processed",
-    models_dir="F:\\git\\btc_trading_bot\\models",
+    processed_dir=BASE_DIR / "data" / "processed",
+    models_dir=BASE_DIR / "models",
     window_size=1440,
     batch_size=32,
     epochs=50,
@@ -29,6 +30,9 @@ def train_model(
     - Test 세트 평가 후 로깅
     - Best Model: models_dir/best_model.pth
     """
+    processed_dir = Path(processed_dir)
+    models_dir = Path(models_dir)
+
     # 데이터 로드
     X_train = np.load(os.path.join(processed_dir, "X_train.npy"))
     Y_train = np.load(os.path.join(processed_dir, "Y_train.npy"))

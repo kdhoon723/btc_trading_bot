@@ -1,14 +1,16 @@
-# F:\git\btc_trading_bot\src\data_loader\prepare_data_for_training.py
-
 import os
 import logging
+from pathlib import Path
 import numpy as np
 from src.data_loader.preprocess_data import load_and_preprocess_data
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-def prepare_data(models_dir="F:\\git\\btc_trading_bot\\models",
-                 processed_dir="F:\\git\\btc_trading_bot\\data\\processed",
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+def prepare_data(models_dir=BASE_DIR / "models",
+                 processed_dir=BASE_DIR / "data" / "processed",
+                 raw_data_path=BASE_DIR / "data" / "raw" / "btc_1m_2years.csv",
                  recent_days=None):
     """
     preprocess_data.py에서 정의한 load_and_preprocess_data 함수를 호출해
@@ -29,9 +31,9 @@ def prepare_data(models_dir="F:\\git\\btc_trading_bot\\models",
 
     # 전처리 수행 (None으로 전체 사용)
     X_data_array, Y_data_array, features, idx = load_and_preprocess_data(
-        data_path="F:\\git\\btc_trading_bot\\data\\raw\\btc_1m_2years.csv",
+        data_path=str(raw_data_path),
         recent_days=recent_days, 
-        models_dir=models_dir
+        models_dir=str(models_dir)
     )
     logging.info("Data loaded and preprocessed successfully.")
 

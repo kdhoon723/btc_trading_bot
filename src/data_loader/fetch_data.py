@@ -1,5 +1,3 @@
-# F:\git\btc_trading_bot\src\data_loader\fetch_data.py
-
 import os
 import time
 import ccxt
@@ -112,7 +110,7 @@ def fetch_full_data():
         df.sort_values("timestamp", inplace=True)
         df.set_index("timestamp", inplace=True)
 
-        csv_path = os.path.join(DATA_RAW_PATH, f"btc_{TIMEFRAME}_{YEARS_TO_FETCH}years.csv")
+        csv_path = DATA_RAW_PATH / f"btc_{TIMEFRAME}_{YEARS_TO_FETCH}years.csv"
         df.to_csv(csv_path)
         logging.info(f"Data saved to {csv_path}, total rows: {len(df)}")
     else:
